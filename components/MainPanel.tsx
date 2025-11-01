@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import type { ProblemHistoryEntry } from '../types';
-import { recognizeHandwriting, getFeedback } from '../services/geminiService';
+import { recognizeHandwriting, getFeedback } from '../services/openAIService';
 import Canvas, { type CanvasRef } from './Canvas';
 import { SparklesIcon } from './icons/SparklesIcon';
 import { EraserIcon } from './icons/EraserIcon';
