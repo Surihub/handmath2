@@ -6,17 +6,23 @@ const PROXY_API_URL = '/api/proxy';
  * A helper function to call our server-side proxy.
  * @param type The type of request ('recognize' or 'feedback').
  * @param payload The data to send to the proxy.
+ * @param apiKey The user's OpenAI API key.
  * @returns The content from the AI model.
  */
-const callProxy = async (type: 'recognize' | 'feedback', payload: any): Promise<string> => {
+const callProxy = async (type: 'recognize' | 'feedback', payload: any, apiKey: string): Promise<string> => {
     console.log(`[CLIENT] Calling proxy for type: ${type}`);
     
+    if (!apiKey) {
+        console.error("[CLIENT] API Key is missing.");
+        throw new Error("API 키가 제공되지 않았습니다. API 키를 입력하고 다시 시도해주세요.");
+    }
+
     const response = await fetch(PROXY_API_URL, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ type, payload }),
+        body: JSON.stringify({ type, payload, apiKey }),
     });
 
     console.log(`[CLIENT] Proxy response status: ${response.status}`);
@@ -43,14 +49,15 @@ const callProxy = async (type: 'recognize' | 'feedback', payload: any): Promise<
 /**
  * Converts a handwritten math equation from an image to a LaTeX string using GPT-4o via the proxy.
  * @param imageDataUrl The base64-encoded image data URL (e.g., from a canvas).
+ * @param apiKey The user's OpenAI API key.
  * @returns A promise that resolves to the recognized LaTeX string.
  */
-export const recognizeHandwriting = async (imageDataUrl: string): Promise<string> => {
+export const recognizeHandwriting = async (imageDataUrl: string, apiKey: string): Promise<string> => {
   try {
      if (!imageDataUrl.startsWith('data:image/png;base64,')) {
       throw new Error("Invalid image data URL format. Must be a base64 PNG.");
     }
-    const latex = await callProxy('recognize', { imageDataUrl });
+    const latex = await callProxy('recognize', { imageDataUrl }, apiKey);
     // In case the model still includes markdown fences, remove them.
     return latex.replace(/```latex|```/g, '').trim();
   } catch (error) {
@@ -65,11 +72,12 @@ export const recognizeHandwriting = async (imageDataUrl: string): Promise<string
  * @param problemLatex The math problem in LaTeX format.
  * @param userSolutionLatex The user's handwritten solution in LaTeX format.
  * @param userMemo The user's notes or solution attempt.
+ * @param apiKey The user's OpenAI API key.
  * @returns A promise that resolves to the AI's feedback in Markdown format.
  */
-export const getFeedback = async (problemLatex: string, userSolutionLatex: string, userMemo: string): Promise<string> => {
+export const getFeedback = async (problemLatex: string, userSolutionLatex: string, userMemo: string, apiKey: string): Promise<string> => {
   try {
-    const feedback = await callProxy('feedback', { problemLatex, userSolutionLatex, userMemo });
+    const feedback = await callProxy('feedback', { problemLatex, userSolutionLatex, userMemo }, apiKey);
     return feedback || '피드백을 생성할 수 없습니다.';
   } catch (error) {
     console.error("[CLIENT] Full error in getFeedback:", error);

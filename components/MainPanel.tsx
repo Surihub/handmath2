@@ -43,10 +43,24 @@ const MainPanel: React.FC<MainPanelProps> = ({ addHistoryEntry, theme }) => {
   const [userMemo, setUserMemo] = useState<string>('');
   const [canvasMode, setCanvasMode] = useState<'pen' | 'eraser'>('pen');
   const [canvasState, setCanvasState] = useState<CanvasState>({ canUndo: false, canRedo: false, isEmpty: true });
+  
+  const [apiKey, setApiKey] = useState('');
+  const [isKeySaved, setIsKeySaved] = useState(false);
+  const [tempApiKey, setTempApiKey] = useState('');
+
 
   const [userSolutionLatex, setUserSolutionLatex] = useState<string>('');
   const [aiFeedback, setAiFeedback] = useState<string>('');
   
+  useEffect(() => {
+    const savedKey = localStorage.getItem('openai_api_key');
+    if (savedKey) {
+        setApiKey(savedKey);
+        setTempApiKey(savedKey);
+        setIsKeySaved(true);
+    }
+  }, []);
+
   useEffect(() => {
     if (problemLatexRef.current && window.katex) {
         try {
@@ -79,7 +93,26 @@ const MainPanel: React.FC<MainPanelProps> = ({ addHistoryEntry, theme }) => {
     }
   }, [status, aiFeedback]);
   
+  const handleSaveKey = () => {
+    if (!tempApiKey.trim()) {
+        setError("API 키를 입력해주세요.");
+        return;
+    }
+    localStorage.setItem('openai_api_key', tempApiKey);
+    setApiKey(tempApiKey);
+    setIsKeySaved(true);
+    setError(null);
+  };
+
+  const handleEditKey = () => {
+      setIsKeySaved(false);
+  };
+
   const handleConvertToText = async () => {
+    if (!apiKey) {
+        setError("OpenAI API 키를 먼저 입력하고 저장해주세요.");
+        return;
+    }
     if (!canvasRef.current || canvasState.isEmpty) {
         setError("먼저 캔버스에 풀이를 작성해주세요.");
         return;
@@ -94,7 +127,7 @@ const MainPanel: React.FC<MainPanelProps> = ({ addHistoryEntry, theme }) => {
     setError(null);
     setAiFeedback('');
     try {
-      const latex = await recognizeHandwriting(imageDataUrl);
+      const latex = await recognizeHandwriting(imageDataUrl, apiKey);
       if (!latex) {
           throw new Error("수식을 인식할 수 없습니다. 더 명확하게 작성해주세요.");
       }
@@ -107,6 +140,10 @@ const MainPanel: React.FC<MainPanelProps> = ({ addHistoryEntry, theme }) => {
   };
   
   const handleGetFeedback = async () => {
+     if (!apiKey) {
+        setError("OpenAI API 키를 먼저 입력하고 저장해주세요.");
+        return;
+    }
     if (!userSolutionLatex) {
         setError("손글씨 풀이를 먼저 '텍스트로 변환하기' 버튼을 눌러 변환해주세요.");
         return;
@@ -115,7 +152,7 @@ const MainPanel: React.FC<MainPanelProps> = ({ addHistoryEntry, theme }) => {
     setStatus('LOADING');
     setError(null);
     try {
-      const feedback = await getFeedback(STATIC_PROBLEM_LATEX, userSolutionLatex, userMemo || "입력된 메모 없음");
+      const feedback = await getFeedback(STATIC_PROBLEM_LATEX, userSolutionLatex, userMemo || "입력된 메모 없음", apiKey);
       setAiFeedback(feedback);
 
       addHistoryEntry({
@@ -157,6 +194,37 @@ const MainPanel: React.FC<MainPanelProps> = ({ addHistoryEntry, theme }) => {
                 <p>{STATIC_PROBLEM_TEXT_END}</p>
             </div>
         </div>
+        
+        {/* API Key Section */}
+        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">API 키 설정</h2>
+            {isKeySaved ? (
+                <div className="flex items-center justify-between">
+                    <p className="text-sm sm:text-base text-green-600 dark:text-green-400 font-medium">API 키가 브라우저에 저장되었습니다.</p>
+                    <button onClick={handleEditKey} className="text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:underline">수정</button>
+                </div>
+            ) : (
+                <div className="space-y-3">
+                    <p className="text-sm text-gray-600 dark:text-gray-400">
+                        OpenAI API 키를 입력해주세요. 키는 브라우저에만 저장되며 저희 서버에는 기록되지 않습니다.
+                    </p>
+                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                        <input
+                            type="password"
+                            value={tempApiKey}
+                            onChange={(e) => setTempApiKey(e.target.value)}
+                            placeholder="sk-..."
+                            className="flex-grow w-full p-2 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                            aria-label="OpenAI API Key"
+                        />
+                        <button onClick={handleSaveKey} className="w-full sm:w-auto bg-indigo-600 text-white font-semibold py-2 px-4 rounded-lg hover:bg-indigo-700 transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                            저장
+                        </button>
+                    </div>
+                </div>
+            )}
+        </div>
+
 
         {/* Solution Input Section */}
         <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
@@ -207,7 +275,7 @@ const MainPanel: React.FC<MainPanelProps> = ({ addHistoryEntry, theme }) => {
         <div className="flex flex-col justify-center items-center gap-4 min-h-[80px]">
             <button 
                 onClick={handleGetFeedback} 
-                disabled={status === 'LOADING' || !userSolutionLatex} 
+                disabled={status === 'LOADING' || !userSolutionLatex || !isKeySaved} 
                 className="w-full max-w-sm bg-indigo-600 text-white font-semibold py-3 px-8 rounded-lg shadow-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-all duration-200 disabled:bg-indigo-400 disabled:cursor-not-allowed flex items-center justify-center text-lg"
             >
                {status === 'LOADING' ? (

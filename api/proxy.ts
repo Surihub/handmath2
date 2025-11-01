@@ -10,16 +10,14 @@ export default async function handler(req: any, res: any) {
     return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
-  const API_KEY = process.env.API_KEY;
-  if (!API_KEY) {
-    console.error("[PROXY] CRITICAL: API_KEY is not configured on the server.");
-    return res.status(500).json({ error: "서버에 API 키가 설정되지 않았습니다. 관리자에게 문의하세요." });
-  }
-
   try {
-    const { type, payload } = req.body;
+    const { type, payload, apiKey } = req.body;
     console.log(`[PROXY] Request type: ${type}`);
-    console.log(`[PROXY] Request payload received: ${!!payload}`);
+
+    if (!apiKey) {
+      console.error("[PROXY] API Key is missing in the request body.");
+      return res.status(401).json({ error: "API 키가 요청에 포함되지 않았습니다." });
+    }
 
     let requestBody;
 
@@ -84,7 +82,7 @@ ${userMemo}
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${API_KEY}`,
+            'Authorization': `Bearer ${apiKey}`,
         },
         body: JSON.stringify(requestBody)
     });
