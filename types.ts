@@ -1,8 +1,8 @@
-
 export interface ProblemHistoryEntry {
   id: string;
   timestamp: string;
   problemLatex: string;
-  userSolution: string;
+  userSolutionLatex: string;
+  userMemo: string;
   aiFeedback: string;
 }

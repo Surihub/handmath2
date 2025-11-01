@@ -1,4 +1,3 @@
-
 import React, { useRef, useEffect, useImperativeHandle, forwardRef, useState } from 'react';
 
 export interface CanvasRef {
@@ -8,94 +7,113 @@ export interface CanvasRef {
 
 interface CanvasProps {
     onDrawingChange: (isEmpty: boolean) => void;
+    theme: 'light' | 'dark';
+    mode: 'pen' | 'eraser';
 }
 
-const Canvas = forwardRef<CanvasRef, CanvasProps>(({ onDrawingChange }, ref) => {
+const Canvas = forwardRef<CanvasRef, CanvasProps>(({ onDrawingChange, theme, mode }, ref) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const contextRef = useRef<CanvasRenderingContext2D | null>(null);
   const isDrawing = useRef(false);
   const [isEmpty, setIsEmpty] = useState(true);
+
+  const setupContext = (context: CanvasRenderingContext2D) => {
+      context.lineCap = 'round';
+      context.lineJoin = 'round';
+      
+      if (mode === 'pen') {
+        context.globalCompositeOperation = 'source-over';
+        context.strokeStyle = theme === 'dark' ? 'white' : 'black';
+        context.lineWidth = 4;
+      } else { // eraser
+        context.globalCompositeOperation = 'destination-out';
+        context.lineWidth = 20;
+      }
+  }
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
     const parent = canvas.parentElement;
-    if (parent) {
-      canvas.width = parent.clientWidth;
-      canvas.height = parent.clientHeight;
-    }
-    
-    canvas.style.width = '100%';
-    canvas.style.height = '100%';
+    if (!parent) return;
 
     const context = canvas.getContext('2d');
-    if (context) {
-      context.lineCap = 'round';
-      context.strokeStyle = document.documentElement.classList.contains('dark') ? 'white' : 'black';
-      context.lineWidth = 4;
-      contextRef.current = context;
-    }
+    if (!context) return;
     
+    contextRef.current = context;
+
     const resizeObserver = new ResizeObserver(entries => {
         for (let entry of entries) {
             const { width, height } = entry.contentRect;
-            const currentContent = context?.getImageData(0,0, canvas.width, canvas.height);
+            const currentContent = contextRef.current?.getImageData(0,0, canvas.width, canvas.height);
             canvas.width = width;
             canvas.height = height;
-            if(currentContent) {
-                context?.putImageData(currentContent, 0, 0);
-            }
-            if (context) {
-                context.lineCap = 'round';
-                context.strokeStyle = document.documentElement.classList.contains('dark') ? 'white' : 'black';
-                context.lineWidth = 4;
+            if (contextRef.current) {
+                setupContext(contextRef.current); // Re-apply styles
+                if(currentContent) {
+                    contextRef.current.putImageData(currentContent, 0, 0);
+                }
             }
         }
     });
+    
+    resizeObserver.observe(parent);
 
-    if(parent) {
-        resizeObserver.observe(parent);
+    // Initial setup
+    const initialWidth = parent.clientWidth;
+    const initialHeight = parent.clientHeight;
+    if (canvas.width !== initialWidth || canvas.height !== initialHeight) {
+      canvas.width = initialWidth;
+      canvas.height = initialHeight;
     }
+    setupContext(context);
     
     return () => {
-        if(parent) resizeObserver.unobserve(parent);
+        resizeObserver.unobserve(parent);
     }
-
   }, []);
 
    useEffect(() => {
     if (contextRef.current) {
-        contextRef.current.strokeStyle = document.documentElement.classList.contains('dark') ? 'white' : 'black';
+        setupContext(contextRef.current);
     }
-  }, []); // Re-run when theme changes if theme was a prop
+  }, [theme, mode]);
 
   const startDrawing = (event: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+    event.preventDefault();
     const { offsetX, offsetY } = getCoords(event);
-    contextRef.current?.beginPath();
-    contextRef.current?.moveTo(offsetX, offsetY);
+    if (!contextRef.current) return;
+    contextRef.current.beginPath();
+    contextRef.current.moveTo(offsetX, offsetY);
     isDrawing.current = true;
   };
 
-  const finishDrawing = () => {
-    contextRef.current?.closePath();
+  const finishDrawing = (event: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+    event.preventDefault();
+    if (!contextRef.current) return;
+    contextRef.current.closePath();
     isDrawing.current = false;
   };
 
   const draw = (event: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
-    if (!isDrawing.current) return;
+    event.preventDefault();
+    if (!isDrawing.current || !contextRef.current) return;
     const { offsetX, offsetY } = getCoords(event);
-    contextRef.current?.lineTo(offsetX, offsetY);
-    contextRef.current?.stroke();
-    if(isEmpty) {
+    contextRef.current.lineTo(offsetX, offsetY);
+    contextRef.current.stroke();
+    if(isEmpty && mode === 'pen') {
         setIsEmpty(false);
         onDrawingChange(false);
     }
   };
   
   const getCoords = (event: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+      const canvas = canvasRef.current;
+      if (!canvas) return { offsetX: 0, offsetY: 0 };
+      const rect = canvas.getBoundingClientRect();
+      
       if ('touches' in event) { // Touch event
-        const rect = (event.target as HTMLCanvasElement).getBoundingClientRect();
         return {
             offsetX: event.touches[0].clientX - rect.left,
             offsetY: event.touches[0].clientY - rect.top,
@@ -115,8 +133,24 @@ const Canvas = forwardRef<CanvasRef, CanvasProps>(({ onDrawingChange }, ref) => 
       }
     },
     getImageData() {
-      if(isEmpty) return null;
-      return canvasRef.current?.toDataURL('image/png') || null;
+      const canvas = canvasRef.current;
+      if(!canvas) return null;
+      
+      // Check if canvas is actually empty
+      const context = canvas.getContext('2d');
+      if (!context) return null;
+      const pixelBuffer = new Uint32Array(context.getImageData(0, 0, canvas.width, canvas.height).data.buffer);
+      const isEmptyCanvas = !pixelBuffer.some(color => color !== 0);
+
+      if (isEmptyCanvas) {
+          if (!isEmpty) {
+              setIsEmpty(true);
+              onDrawingChange(true);
+          }
+          return null;
+      }
+      
+      return canvas.toDataURL('image/png');
     }
   }));
 
@@ -130,7 +164,7 @@ const Canvas = forwardRef<CanvasRef, CanvasProps>(({ onDrawingChange }, ref) => 
       onTouchStart={startDrawing}
       onTouchEnd={finishDrawing}
       onTouchMove={draw}
-      className="bg-white dark:bg-gray-900 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg cursor-crosshair"
+      className="w-full h-full bg-gray-50 dark:bg-gray-900 rounded-lg cursor-crosshair touch-none"
     />
   );
 });

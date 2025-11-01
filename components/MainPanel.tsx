@@ -1,9 +1,11 @@
-import React, { useState, useRef, useMemo, useEffect } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import type { ProblemHistoryEntry } from '../types';
-import { recognizeHandwriting, getFeedback } from '../services/openAIService';
+import { recognizeHandwriting, getFeedback } from '../services/geminiService';
 import Canvas, { type CanvasRef } from './Canvas';
 import { SparklesIcon } from './icons/SparklesIcon';
 import { EraserIcon } from './icons/EraserIcon';
+import { PenIcon } from './icons/PenIcon';
+import { ArrowPathIcon } from './icons/ArrowPathIcon';
 
 declare global {
   interface Window {
@@ -14,225 +16,210 @@ declare global {
 
 interface MainPanelProps {
   addHistoryEntry: (entry: Omit<ProblemHistoryEntry, 'id' | 'timestamp'>) => void;
+  theme: 'light' | 'dark';
 }
 
-type Step = 'DRAWING' | 'SOLVING' | 'FEEDBACK';
+type Status = 'IDLE' | 'RECOGNIZING' | 'LOADING' | 'SUCCESS';
 
-const MainPanel: React.FC<MainPanelProps> = ({ addHistoryEntry }) => {
+const STATIC_PROBLEM_TEXT = "두 상수 a, b에 대하여";
+const STATIC_PROBLEM_LATEX = String.raw`\lim_{x \to -2} \frac{\sqrt{2x + a} + b}{x + 2} = \frac{1}{3}`;
+const STATIC_PROBLEM_TEXT_END = "일 때, a, b의 값을 구하시오.";
+
+const MainPanel: React.FC<MainPanelProps> = ({ addHistoryEntry, theme }) => {
   const canvasRef = useRef<CanvasRef>(null);
-  const problemDisplayRef = useRef<HTMLDivElement>(null);
   const feedbackDisplayRef = useRef<HTMLDivElement>(null);
+  const problemLatexRef = useRef<HTMLDivElement>(null);
+  const solutionLatexRef = useRef<HTMLDivElement>(null);
 
-  const [currentStep, setCurrentStep] = useState<Step>('SOLVING');
-  const [isLoading, setIsLoading] = useState(false);
+  const [status, setStatus] = useState<Status>('IDLE');
   const [error, setError] = useState<string | null>(null);
-
-  const [recognizedLatex, setRecognizedLatex] = useState<string>('\\text{두 상수 } a, b \\text{에 대하여 } \\lim_{x \\to -2} \\frac{\\sqrt{2x+a}+b}{x+2} = \\frac{1}{3} \\text{ 일 때, } a \\text{와 } b\\text{의 값을 구하시오.}');
-  const [userSolution, setUserSolution] = useState<string>('');
-  const [aiFeedback, setAiFeedback] = useState<string>('');
+  const [userMemo, setUserMemo] = useState<string>('');
   const [isCanvasEmpty, setIsCanvasEmpty] = useState<boolean>(true);
+  const [canvasMode, setCanvasMode] = useState<'pen' | 'eraser'>('pen');
 
-
-  const loadingMessage = useMemo(() => {
-    if (currentStep === 'DRAWING') return '손글씨를 인식하는 중입니다...';
-    if (currentStep === 'SOLVING') return 'AI가 풀이를 분석하고 있습니다...';
-    return '';
-  }, [currentStep]);
-
+  const [userSolutionLatex, setUserSolutionLatex] = useState<string>('');
+  const [aiFeedback, setAiFeedback] = useState<string>('');
+  
   useEffect(() => {
-    if (recognizedLatex && problemDisplayRef.current && window.katex) {
-      try {
-        const html = window.katex.renderToString(recognizedLatex, {
-          throwOnError: false,
-          displayMode: true,
-        });
-        problemDisplayRef.current.innerHTML = html;
-      } catch (e) {
-        console.error("KaTeX rendering error:", e);
-        if (problemDisplayRef.current) {
-          problemDisplayRef.current.textContent = `LaTeX 렌더링 오류: ${recognizedLatex}`;
-        }
-      }
+    if (problemLatexRef.current && window.katex) {
+        try {
+            window.katex.render(STATIC_PROBLEM_LATEX, problemLatexRef.current, {
+                throwOnError: false,
+                displayMode: true,
+            });
+        } catch (e) { console.error(e); }
     }
-  }, [recognizedLatex]);
+  }, []);
 
   useEffect(() => {
-    if (aiFeedback && feedbackDisplayRef.current && window.marked) {
+    if (solutionLatexRef.current && window.katex) {
+        solutionLatexRef.current.innerHTML = '';
+        if (userSolutionLatex) {
+            try {
+                window.katex.render(userSolutionLatex, solutionLatexRef.current, {
+                    throwOnError: false,
+                    displayMode: true,
+                });
+            } catch (e) { console.error(e); }
+        }
+    }
+  }, [userSolutionLatex]);
+
+  useEffect(() => {
+    if (status === 'SUCCESS' && aiFeedback && feedbackDisplayRef.current && window.marked) {
         const rawHtml = window.marked.parse(aiFeedback);
         feedbackDisplayRef.current.innerHTML = rawHtml;
-
-        // After setting HTML, find all LaTeX blocks and render them
-        const latexElements = feedbackDisplayRef.current.querySelectorAll('p, li');
-        latexElements.forEach(el => {
-            const textContent = el.textContent || '';
-            const latexRegex = /\\$(.*?)\\$/g;
-            if(latexRegex.test(textContent)) {
-                const newHtml = textContent.replace(latexRegex, (match, latex) => {
-                    try {
-                        return window.katex.renderToString(latex, { throwOnError: false });
-                    } catch (e) {
-                        return match; // return original on error
-                    }
-                });
-                el.innerHTML = newHtml;
-            }
-        });
     }
-  }, [aiFeedback]);
-
-  const handleRecognize = async () => {
-    if (!canvasRef.current) return;
+  }, [status, aiFeedback]);
+  
+  const handleConvertToText = async () => {
+    if (!canvasRef.current || isCanvasEmpty) {
+        setError("먼저 캔버스에 풀이를 작성해주세요.");
+        return;
+    }
     const imageDataUrl = canvasRef.current.getImageData();
     if (!imageDataUrl) {
-        setError("캔버스가 비어있습니다. 문제를 작성해주세요.");
+        setError("캔버스가 비어있습니다.");
         return;
     }
     
-    setIsLoading(true);
+    setStatus('RECOGNIZING');
     setError(null);
     try {
       const latex = await recognizeHandwriting(imageDataUrl);
       if (!latex) {
           throw new Error("수식을 인식할 수 없습니다. 더 명확하게 작성해주세요.");
       }
-      setRecognizedLatex(latex);
-      setCurrentStep('SOLVING');
+      setUserSolutionLatex(latex);
+      setStatus('IDLE');
     } catch (e: any) {
-      setError(e.message || '알 수 없는 오류가 발생했습니다.');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleGetFeedback = async () => {
-    if (!userSolution.trim()) {
-      setError("풀이를 입력해주세요.");
-      return;
-    }
-
-    setIsLoading(true);
-    setError(null);
-    try {
-      const feedback = await getFeedback(recognizedLatex, userSolution);
-      setAiFeedback(feedback);
-      setCurrentStep('FEEDBACK');
-      addHistoryEntry({
-        problemLatex: recognizedLatex,
-        userSolution: userSolution,
-        aiFeedback: feedback,
-      });
-    } catch (e: any) {
-      setError(e.message || '알 수 없는 오류가 발생했습니다.');
-    } finally {
-      setIsLoading(false);
+      setError(e.message || '텍스트 변환 중 오류가 발생했습니다.');
+      setStatus('IDLE');
     }
   };
   
-  const handleStartNew = () => {
-    setCurrentStep('DRAWING');
-    setRecognizedLatex('');
-    setUserSolution('');
-    setAiFeedback('');
-    setError(null);
-    canvasRef.current?.clear();
-  };
-
-  const handleClearCanvas = () => {
-    canvasRef.current?.clear();
-  };
-
-  const renderContent = () => {
-    if (isLoading) {
-      return (
-        <div className="flex flex-col items-center justify-center h-full text-center p-4">
-          <div className="w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
-          <p className="mt-4 text-lg font-medium text-gray-700 dark:text-gray-300">{loadingMessage}</p>
-        </div>
-      );
+  const handleGetFeedback = async () => {
+    if (!userSolutionLatex) {
+        setError("손글씨 풀이를 먼저 '텍스트로 변환하기' 버튼을 눌러 변환해주세요.");
+        return;
     }
     
-    if (currentStep === 'FEEDBACK') {
-        return (
-            <div className="flex flex-col h-full">
-                <div className="p-4 sm:p-6 border-b border-gray-200 dark:border-gray-700">
-                    <h2 className="text-sm font-semibold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider">문제</h2>
-                    <div ref={problemDisplayRef} className="text-2xl mt-2 text-gray-900 dark:text-gray-100"></div>
-                </div>
-                 <div className="p-4 sm:p-6 border-b border-gray-200 dark:border-gray-700">
-                    <h2 className="text-sm font-semibold text-green-600 dark:text-green-400 uppercase tracking-wider">나의 풀이</h2>
-                    <p className="whitespace-pre-wrap mt-2 text-gray-700 dark:text-gray-300">{userSolution}</p>
-                </div>
-                <div className="flex-grow p-4 sm:p-6 overflow-y-auto">
-                    <h2 className="text-sm font-semibold text-purple-600 dark:text-purple-400 uppercase tracking-wider mb-2">AI 피드백</h2>
-                    <div ref={feedbackDisplayRef} className="prose prose-indigo dark:prose-invert max-w-none"></div>
-                </div>
-                <div className="p-4 sm:p-6 border-t border-gray-200 dark:border-gray-700 flex-shrink-0">
-                    <button onClick={handleStartNew} className="w-full bg-indigo-600 text-white font-semibold py-3 px-4 rounded-lg shadow-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-all duration-200">
-                        다른 문제 풀기
-                    </button>
-                </div>
-            </div>
-        )
-    }
+    setStatus('LOADING');
+    setError(null);
+    try {
+      const feedback = await getFeedback(STATIC_PROBLEM_LATEX, userSolutionLatex, userMemo || "입력된 메모 없음");
+      setAiFeedback(feedback);
 
-    if (currentStep === 'SOLVING') {
-        return (
-             <div className="flex flex-col h-full">
-                <div className="p-4 sm:p-6 border-b border-gray-200 dark:border-gray-700">
-                    <h2 className="text-sm font-semibold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider">인식된 문제</h2>
-                    <div ref={problemDisplayRef} className="text-2xl mt-2 text-gray-900 dark:text-gray-100"></div>
-                </div>
-                <div className="flex-grow p-4 sm:p-6 flex flex-col">
-                    <label htmlFor="solution" className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">풀이 과정을 단계별로 입력하세요:</label>
-                    <textarea
-                        id="solution"
-                        value={userSolution}
-                        onChange={(e) => setUserSolution(e.target.value)}
-                        className="w-full flex-grow p-3 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors"
-                        placeholder="예시)&#10;1. 분모가 0에 수렴하므로, 분자도 0에 수렴해야 한다.&#10;2. ..."
-                    />
-                </div>
-                 {error && <p className="text-red-500 text-sm px-6 pb-2 text-center">{error}</p>}
-                <div className="p-4 sm:p-6 border-t border-gray-200 dark:border-gray-700 flex-shrink-0 flex items-center space-x-4">
-                     <button onClick={handleStartNew} className="w-1/3 bg-gray-200 text-gray-800 font-semibold py-3 px-4 rounded-lg hover:bg-gray-300 dark:bg-gray-600 dark:text-gray-200 dark:hover:bg-gray-500 transition-colors">
-                        뒤로
-                    </button>
-                    <button onClick={handleGetFeedback} className="w-2/3 bg-green-600 text-white font-semibold py-3 px-4 rounded-lg shadow-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition-all duration-200 flex items-center justify-center">
-                        <SparklesIcon className="w-5 h-5 mr-2" />
-                        피드백 받기
-                    </button>
-                </div>
-            </div>
-        )
-    }
+      addHistoryEntry({
+        problemLatex: STATIC_PROBLEM_LATEX,
+        userSolutionLatex: userSolutionLatex,
+        userMemo: userMemo,
+        aiFeedback: feedback,
+      });
 
-    // Default to DRAWING step
-    return (
-        <div className="flex flex-col h-full">
-            <div className="p-4 sm:p-6 flex-shrink-0">
-                <h2 className="text-lg font-semibold text-gray-900 dark:text-white">아래에 수학 문제를 손으로 써보세요</h2>
-                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">마우스나 손가락을 사용해 캔버스에 필기하세요.</p>
-            </div>
-            <div className="flex-grow p-4 sm:p-6 relative">
-                 <Canvas ref={canvasRef} onDrawingChange={(empty) => setIsCanvasEmpty(empty)} />
-            </div>
-            {error && <p className="text-red-500 text-sm px-6 pb-2 text-center">{error}</p>}
-            <div className="p-4 sm:p-6 border-t border-gray-200 dark:border-gray-700 flex-shrink-0 flex items-center space-x-4">
-                 <button onClick={handleClearCanvas} className="w-1/3 bg-gray-200 text-gray-800 font-semibold py-3 px-4 rounded-lg hover:bg-gray-300 dark:bg-gray-600 dark:text-gray-200 dark:hover:bg-gray-500 transition-colors flex items-center justify-center">
-                    <EraserIcon className="w-5 h-5 mr-2" />
-                    지우기
-                </button>
-                <button onClick={handleRecognize} disabled={isCanvasEmpty} className="w-2/3 bg-indigo-600 text-white font-semibold py-3 px-4 rounded-lg shadow-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-all duration-200 disabled:bg-indigo-400 disabled:cursor-not-allowed">
-                    수식 인식하기
-                </button>
-            </div>
-        </div>
-    );
+      setStatus('SUCCESS');
+    } catch (e: any) {
+      setError(e.message || '알 수 없는 오류가 발생했습니다.');
+      setStatus('IDLE');
+    }
+  };
+  
+  const handleClearAll = () => {
+    canvasRef.current?.clear();
+    setUserMemo('');
+    setUserSolutionLatex('');
+    setAiFeedback('');
+    setError(null);
+    setStatus('IDLE');
+    setCanvasMode('pen');
   };
   
   return (
-    <div className="flex-grow w-full md:w-2/3 bg-white dark:bg-gray-800 flex flex-col">
-      {renderContent()}
+    <div className="flex-grow p-4 sm:p-6 md:p-8 flex flex-col items-center">
+      <div className="w-full max-w-4xl space-y-6">
+        
+        {/* Problem Section */}
+        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">오늘의 문제</h2>
+            <div className="text-gray-800 dark:text-gray-200 text-base md:text-lg text-center space-y-2">
+                <p>{STATIC_PROBLEM_TEXT}</p>
+                <div ref={problemLatexRef} />
+                <p>{STATIC_PROBLEM_TEXT_END}</p>
+            </div>
+        </div>
+
+        {/* Solution Input Section */}
+        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">풀이 작성하기</h2>
+            <div className="grid md:grid-cols-2 gap-6">
+                {/* Handwriting Part */}
+                <div>
+                    <h3 className="text-base font-semibold text-gray-800 dark:text-gray-200 mb-2">1) 손글씨로 풀이 쓰기</h3>
+                    <div className="flex items-center space-x-2 mb-2">
+                        <button onClick={() => setCanvasMode('pen')} className={`p-2 rounded-md transition-colors ${canvasMode === 'pen' ? 'bg-indigo-100 dark:bg-indigo-900 text-indigo-600 dark:text-indigo-300' : 'hover:bg-gray-200 dark:hover:bg-gray-700'}`} aria-label="펜 모드"><PenIcon className="w-5 h-5"/></button>
+                        <button onClick={() => setCanvasMode('eraser')} className={`p-2 rounded-md transition-colors ${canvasMode === 'eraser' ? 'bg-indigo-100 dark:bg-indigo-900 text-indigo-600 dark:text-indigo-300' : 'hover:bg-gray-200 dark:hover:bg-gray-700'}`} aria-label="지우개 모드"><EraserIcon className="w-5 h-5"/></button>
+                        <button onClick={() => canvasRef.current?.clear()} className="p-2 rounded-md hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors" aria-label="캔버스 초기화"><ArrowPathIcon className="w-5 h-5"/></button>
+                    </div>
+                    <div className="h-64 w-full rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700">
+                        <Canvas ref={canvasRef} onDrawingChange={setIsCanvasEmpty} theme={theme} mode={canvasMode} />
+                    </div>
+                    <button onClick={handleConvertToText} disabled={isCanvasEmpty || status === 'RECOGNIZING'} className="mt-3 w-full bg-gray-200 text-gray-800 font-semibold py-2 px-4 rounded-lg hover:bg-gray-300 dark:bg-gray-600 dark:text-gray-200 dark:hover:bg-gray-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                        {status === 'RECOGNIZING' ? '변환 중...' : '텍스트로 변환하기'}
+                    </button>
+                    {userSolutionLatex && (
+                        <div className="mt-3 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg min-h-[50px]">
+                            <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1">변환 결과 (LaTeX)</p>
+                            <div ref={solutionLatexRef} className="text-sm"></div>
+                        </div>
+                    )}
+                </div>
+                {/* Memo Part */}
+                <div className="flex flex-col">
+                    <div className="flex justify-between items-center mb-2">
+                        <h3 className="text-base font-semibold text-gray-800 dark:text-gray-200">2) 텍스트로 메모 남기기</h3>
+                        <button onClick={() => setUserMemo('')} className="text-xs font-medium text-gray-500 hover:text-gray-800 dark:hover:text-gray-200">초기화</button>
+                    </div>
+                    <textarea
+                        value={userMemo}
+                        onChange={(e) => setUserMemo(e.target.value)}
+                        placeholder="예) 극한값을 구하기 위해 분모를 0으로 만드는 x값을 대입했는데, 그 다음이 헷갈려요."
+                        className="flex-grow w-full p-3 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors"
+                        rows={8}
+                    />
+                </div>
+            </div>
+        </div>
+
+        {/* Action Button */}
+        <div className="flex flex-col justify-center items-center gap-4">
+          <button onClick={handleGetFeedback} disabled={!userSolutionLatex || status === 'LOADING'} className="w-full max-w-sm bg-indigo-600 text-white font-semibold py-3 px-8 rounded-lg shadow-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-all duration-200 disabled:bg-indigo-400 disabled:cursor-not-allowed flex items-center justify-center text-lg">
+             {status === 'LOADING' ? (
+                <>
+                  <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin mr-3"></div>
+                  분석 중...
+                </>
+             ) : (
+                <>
+                  <SparklesIcon className="w-6 h-6 mr-2" />
+                  AI 피드백 받기
+                </>
+             )}
+          </button>
+           <button onClick={handleClearAll} className="text-sm text-gray-500 dark:text-gray-400 hover:underline">
+            전체 초기화
+          </button>
+        </div>
+        
+        {error && <p className="text-red-500 text-sm text-center font-medium bg-red-100 dark:bg-red-900/30 py-2 px-4 rounded-md">{error}</p>}
+
+        {/* Output Section */}
+        {status === 'SUCCESS' && (
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6 animate-fade-in">
+              <h2 className="text-sm font-semibold text-purple-600 dark:text-purple-400 uppercase tracking-wider mb-3">AI 피드백</h2>
+              <div ref={feedbackDisplayRef} className="prose prose-indigo dark:prose-invert max-w-none text-base"></div>
+          </div>
+        )}
+      </div>
     </div>
   );
 };

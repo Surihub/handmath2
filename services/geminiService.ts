@@ -1,13 +1,9 @@
 
 import { GoogleGenAI } from "@google/genai";
 
-const API_KEY = process.env.API_KEY;
-
-if (!API_KEY) {
-  throw new Error("API_KEY environment variable is not set");
-}
-
-const ai = new GoogleGenAI({ apiKey: API_KEY });
+// Per @google/genai guidelines, the API key must be sourced from `process.env.API_KEY`.
+// It is assumed to be pre-configured and available in the execution context.
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY! });
 
 /**
  * Converts a handwritten math equation from an image to a LaTeX string.
@@ -39,37 +35,34 @@ export const recognizeHandwriting = async (imageDataUrl: string): Promise<string
     });
 
     const latex = response.text.trim();
-    // A simple heuristic to clean up potential markdown fences that might still slip through
     return latex.replace(/```latex|```/g, '').trim();
   } catch (error) {
     console.error("Error recognizing handwriting:", error);
-    throw new Error("Failed to recognize the equation. Please try again.");
+    throw new Error("수식 인식에 실패했습니다. 다시 시도해주세요.");
   }
 };
 
 /**
- * Gets AI-powered feedback on a user's solution to a math problem.
+ * Gets AI-powered feedback for a given math problem, user solution, and user's memo.
  * @param problemLatex The math problem in LaTeX format.
- * @param userSolution The user's provided solution.
- * @returns A promise that resolves to the AI's feedback in Markdown format.
+ * @param userSolutionLatex The user's handwritten solution in LaTeX format.
+ * @param userMemo The user's notes or solution attempt.
+ * @returns A promise that resolves to the AI's feedback in Markdown format (max 3 sentences).
  */
-export const getFeedback = async (problemLatex: string, userSolution: string): Promise<string> => {
+export const getFeedback = async (problemLatex: string, userSolutionLatex: string, userMemo: string): Promise<string> => {
   try {
-    const systemInstruction = `당신은 중고등학생을 위한 전문적이고 친절한 수학 교사입니다. 학생의 문제 풀이 과정에 대해 건설적이고, 격려가 되며, 이해하기 쉬운 피드백을 제공하는 것이 목표입니다. 답변은 반드시 마크다운 형식으로 작성해야 합니다.`;
+    const systemInstruction = `당신은 중고등학생을 위한 친절한 수학 튜터입니다. 학생이 제시한 수학 문제에 대한 학생의 풀이와 생각을 바탕으로, 핵심을 짚어주는 간결한 피드백을 제공해야 합니다. 답변은 반드시 한국어와 마크다운 형식으로, 세 문장 이내로 작성해야 합니다.`;
     
-    const userPrompt = `다음 수학 문제와 학생의 풀이를 분석해주세요.
+    const userPrompt = `다음 수학 문제에 대한 저의 풀이와 생각입니다. 피드백해주세요.
 
 **문제 (LaTeX):**
 ${problemLatex}
 
-**학생의 풀이:**
-${userSolution}
+**나의 풀이 (LaTeX):**
+${userSolutionLatex}
 
-다음과 같은 구조로 피드백을 제공해주세요:
-1.  **총평:** 학생의 풀이에 대한 간결하고 격려가 되는 요약.
-2.  **단계별 분석:** 구체적인 계산 실수나 논리적 오류를 지적해주세요. 풀이가 맞았다면, 정확하다고 확인해주고 칭찬해주세요.
-3.  **다른 접근법:** 가능하다면, 문제를 풀 수 있는 다른 유효한 방법을 제안해주세요.
-4.  **다음 도전 과제:** 학생의 이해를 돕기 위해, 유사한 새로운 연습 문제 하나를 (풀이 없이) 제공해주세요.
+**나의 생각 / 질문:**
+${userMemo}
 `;
 
     const response = await ai.models.generateContent({
@@ -83,6 +76,6 @@ ${userSolution}
     return response.text;
   } catch (error) {
     console.error("Error getting AI feedback:", error);
-    throw new Error("Failed to get feedback from the AI. Please try again.");
+    throw new Error("AI 피드백을 생성하는데 실패했습니다. 다시 시도해주세요.");
   }
 };
