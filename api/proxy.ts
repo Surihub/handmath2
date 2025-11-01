@@ -1,60 +1,52 @@
 // api/proxy.ts
 
-import { GoogleGenAI } from "@google/genai";
+const OPENAI_API_URL = 'https://api.openai.com/v1/chat/completions';
 
-// This is a Vercel Serverless Function that runs in a Node.js environment.
-const API_KEY = process.env.API_KEY;
-
-// Check for API key at startup.
-if (!API_KEY) {
-  // This log is for the server-side Vercel logs.
-  console.error("API_KEY is not configured on the server.");
-  // Throwing an error will prevent the function from being deployed/run without a key.
-  throw new Error("API_KEY is not configured on the server.");
-}
-
-const ai = new GoogleGenAI({ apiKey: API_KEY });
-
-// A generic handler for Vercel's serverless environment.
 export default async function handler(req: any, res: any) {
+  console.log(`[PROXY] Received request: ${req.method}`);
+
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
+  const API_KEY = process.env.API_KEY;
+  if (!API_KEY) {
+    console.error("[PROXY] CRITICAL: API_KEY is not configured on the server.");
+    return res.status(500).json({ error: "서버에 API 키가 설정되지 않았습니다. 관리자에게 문의하세요." });
+  }
+
   try {
     const { type, payload } = req.body;
+    console.log(`[PROXY] Request type: ${type}`);
+    console.log(`[PROXY] Request payload received: ${!!payload}`);
+
+    let requestBody;
 
     if (type === 'recognize') {
         const { imageDataUrl } = payload;
         if (!imageDataUrl) {
             return res.status(400).json({ error: 'imageDataUrl is required for recognition.' });
         }
-        const base64Data = imageDataUrl.split(',')[1];
-        if (!base64Data) {
-            return res.status(400).json({ error: 'Invalid image data URL format.' });
-        }
-
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: {
-                parts: [
-                    {
-                        text: "주어진 이미지의 수학 손글씨를 분석하여 깔끔한 단일 LaTeX 문자열로 변환해주세요. ```latex ... ``` 와 같은 마크다운 형식이나 다른 설명 없이, 오직 LaTeX 문자열만 출력해야 합니다. 만약 이미지에 인식할 수 있는 수학 수식이 없다면 빈 문자열을 반환하세요.",
-                    },
-                    {
-                        inlineData: {
-                            mimeType: 'image/png',
-                            data: base64Data,
+        requestBody = {
+            model: 'gpt-4o',
+            messages: [
+                {
+                    role: 'user',
+                    content: [
+                        {
+                            type: 'text',
+                            text: "당신은 수학 손글씨 인식 전문가입니다. 주어진 수학 손글씨 이미지를 깔끔한 단일 LaTeX 문자열로 변환하는 것이 당신의 임무입니다. 중요: 당신의 출력은 오직 LaTeX 코드만 포함해야 합니다. 어떤 추가적인 설명이나 ```latex ... ```와 같은 마크다운 형식을 절대 포함하지 마세요. 만약 이미지에 인식할 수 있는 수학 수식이 없다면, 빈 문자열을 반환하세요."
                         },
-                    },
-                ],
-            },
-        });
-        
-        const latex = response.text.trim();
-        const content = latex.replace(/```latex|```/g, '').trim();
-        return res.status(200).json({ content });
+                        {
+                            type: 'image_url',
+                            image_url: { url: imageDataUrl },
+                        }
+                    ]
+                }
+            ],
+            max_tokens: 500,
+        };
 
     } else if (type === 'feedback') {
         const { problemLatex, userSolutionLatex, userMemo } = payload;
@@ -75,25 +67,44 @@ ${userSolutionLatex}
 **나의 생각 / 질문:**
 ${userMemo}
 `;
-
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-pro',
-            contents: userPrompt,
-            config: {
-                systemInstruction: systemInstruction,
-            },
-        });
-        
-        const content = response.text;
-        return res.status(200).json({ content });
+        requestBody = {
+            model: 'gpt-4o',
+            messages: [
+                { role: 'system', content: systemInstruction },
+                { role: 'user', content: userPrompt }
+            ]
+        };
 
     } else {
       return res.status(400).json({ error: 'Invalid request type.' });
     }
 
+    console.log('[PROXY] Constructing OpenAI request...');
+    const openAIResponse = await fetch(OPENAI_API_URL, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${API_KEY}`,
+        },
+        body: JSON.stringify(requestBody)
+    });
+
+    console.log(`[PROXY] OpenAI response status: ${openAIResponse.status}`);
+    if (!openAIResponse.ok) {
+        const errorData = await openAIResponse.json();
+        console.error('[PROXY] OpenAI API Error:', JSON.stringify(errorData, null, 2));
+        const errorMessage = errorData.error?.message || 'OpenAI API로부터 오류가 발생했습니다.';
+        return res.status(openAIResponse.status).json({ error: errorMessage });
+    }
+
+    const data = await openAIResponse.json();
+    console.log('[PROXY] OpenAI response data received successfully.');
+    const content = data.choices[0]?.message?.content || '';
+    return res.status(200).json({ content });
+
   } catch (error: any) {
-    console.error('Proxy error:', error);
+    console.error('[PROXY] Internal proxy error:', error);
     const errorMessage = error.message || 'An internal server error occurred.';
-    return res.status(500).json({ error: `AI 서비스 요청에 실패했습니다. (${errorMessage})` });
+    return res.status(500).json({ error: `AI 서비스 요청 중 서버 내부 오류가 발생했습니다. (${errorMessage})` });
   }
 }
