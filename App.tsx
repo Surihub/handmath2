@@ -1,5 +1,4 @@
 
-
 import React, { useState, useEffect, useCallback } from 'react';
 import type { ProblemHistoryEntry } from './types';
 import Header from './components/Header';
@@ -21,7 +20,6 @@ const App: React.FC = () => {
   });
 
   const [history, setHistory] = useState<ProblemHistoryEntry[]>([]);
-
 
   useEffect(() => {
     const root = window.document.documentElement;
@@ -65,21 +63,19 @@ const App: React.FC = () => {
   const clearHistory = useCallback(() => {
     setHistory([]);
   }, []);
-  
 
   return (
-    <div className="min-h-screen flex flex-col text-gray-800 dark:text-gray-200 bg-gray-100 dark:bg-gray-900 transition-colors duration-300">
+    <div className="min-h-screen h-screen flex flex-col text-gray-800 dark:text-gray-200 bg-gray-100 dark:bg-gray-900 transition-colors duration-300">
       <Header 
         theme={theme} 
         toggleTheme={toggleTheme} 
         />
-      <main className="flex-grow flex flex-col md:flex-row overflow-hidden">
+      <main className="flex-grow flex flex-row overflow-hidden">
+        <MainPanel addHistoryEntry={addHistoryEntry} theme={theme} />
         <HistoryPanel 
           history={history} 
           clearHistory={clearHistory}
         />
-        {/* FIX: Add missing 'theme' prop to MainPanel */}
-        <MainPanel addHistoryEntry={addHistoryEntry} theme={theme} />
       </main>
     </div>
   );

@@ -6,6 +6,8 @@ import { SparklesIcon } from './icons/SparklesIcon';
 import { EraserIcon } from './icons/EraserIcon';
 import { PenIcon } from './icons/PenIcon';
 import { ArrowPathIcon } from './icons/ArrowPathIcon';
+import { UndoIcon } from './icons/UndoIcon';
+import { RedoIcon } from './icons/RedoIcon';
 
 declare global {
   interface Window {
@@ -19,7 +21,12 @@ interface MainPanelProps {
   theme: 'light' | 'dark';
 }
 
-type Status = 'IDLE' | 'RECOGNIZING' | 'LOADING' | 'SUCCESS';
+type Status = 'IDLE' | 'RECOGNIZING' | 'LOADING' | 'SUCCESS' | 'CONVERTED';
+type CanvasState = {
+    canUndo: boolean;
+    canRedo: boolean;
+    isEmpty: boolean;
+}
 
 const STATIC_PROBLEM_TEXT = "두 상수 a, b에 대하여";
 const STATIC_PROBLEM_LATEX = String.raw`\lim_{x \to -2} \frac{\sqrt{2x + a} + b}{x + 2} = \frac{1}{3}`;
@@ -34,8 +41,8 @@ const MainPanel: React.FC<MainPanelProps> = ({ addHistoryEntry, theme }) => {
   const [status, setStatus] = useState<Status>('IDLE');
   const [error, setError] = useState<string | null>(null);
   const [userMemo, setUserMemo] = useState<string>('');
-  const [isCanvasEmpty, setIsCanvasEmpty] = useState<boolean>(true);
   const [canvasMode, setCanvasMode] = useState<'pen' | 'eraser'>('pen');
+  const [canvasState, setCanvasState] = useState<CanvasState>({ canUndo: false, canRedo: false, isEmpty: true });
 
   const [userSolutionLatex, setUserSolutionLatex] = useState<string>('');
   const [aiFeedback, setAiFeedback] = useState<string>('');
@@ -73,7 +80,7 @@ const MainPanel: React.FC<MainPanelProps> = ({ addHistoryEntry, theme }) => {
   }, [status, aiFeedback]);
   
   const handleConvertToText = async () => {
-    if (!canvasRef.current || isCanvasEmpty) {
+    if (!canvasRef.current || canvasState.isEmpty) {
         setError("먼저 캔버스에 풀이를 작성해주세요.");
         return;
     }
@@ -85,13 +92,14 @@ const MainPanel: React.FC<MainPanelProps> = ({ addHistoryEntry, theme }) => {
     
     setStatus('RECOGNIZING');
     setError(null);
+    setAiFeedback('');
     try {
       const latex = await recognizeHandwriting(imageDataUrl);
       if (!latex) {
           throw new Error("수식을 인식할 수 없습니다. 더 명확하게 작성해주세요.");
       }
       setUserSolutionLatex(latex);
-      setStatus('IDLE');
+      setStatus('CONVERTED');
     } catch (e: any) {
       setError(e.message || '텍스트 변환 중 오류가 발생했습니다.');
       setStatus('IDLE');
@@ -118,9 +126,11 @@ const MainPanel: React.FC<MainPanelProps> = ({ addHistoryEntry, theme }) => {
       });
 
       setStatus('SUCCESS');
-    } catch (e: any) {
+    } catch (e: any)
+{
       setError(e.message || '알 수 없는 오류가 발생했습니다.');
-      setStatus('IDLE');
+      // Keep status as CONVERTED so user can try again without re-converting
+      setStatus(userSolutionLatex ? 'CONVERTED' : 'IDLE');
     }
   };
   
@@ -135,7 +145,7 @@ const MainPanel: React.FC<MainPanelProps> = ({ addHistoryEntry, theme }) => {
   };
   
   return (
-    <div className="flex-grow p-4 sm:p-6 md:p-8 flex flex-col items-center">
+    <div className="flex-grow p-4 sm:p-6 md:p-8 flex flex-col items-center overflow-y-auto">
       <div className="w-full max-w-4xl space-y-6">
         
         {/* Problem Section */}
@@ -155,15 +165,18 @@ const MainPanel: React.FC<MainPanelProps> = ({ addHistoryEntry, theme }) => {
                 {/* Handwriting Part */}
                 <div>
                     <h3 className="text-base font-semibold text-gray-800 dark:text-gray-200 mb-2">1) 손글씨로 풀이 쓰기</h3>
-                    <div className="flex items-center space-x-2 mb-2">
+                    <div className="flex items-center space-x-1 mb-2">
                         <button onClick={() => setCanvasMode('pen')} className={`p-2 rounded-md transition-colors ${canvasMode === 'pen' ? 'bg-indigo-100 dark:bg-indigo-900 text-indigo-600 dark:text-indigo-300' : 'hover:bg-gray-200 dark:hover:bg-gray-700'}`} aria-label="펜 모드"><PenIcon className="w-5 h-5"/></button>
                         <button onClick={() => setCanvasMode('eraser')} className={`p-2 rounded-md transition-colors ${canvasMode === 'eraser' ? 'bg-indigo-100 dark:bg-indigo-900 text-indigo-600 dark:text-indigo-300' : 'hover:bg-gray-200 dark:hover:bg-gray-700'}`} aria-label="지우개 모드"><EraserIcon className="w-5 h-5"/></button>
+                        <div className="h-5 w-px bg-gray-200 dark:bg-gray-700 mx-1"></div>
+                        <button onClick={() => canvasRef.current?.undo()} disabled={!canvasState.canUndo} className="p-2 rounded-md hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed" aria-label="실행 취소"><UndoIcon className="w-5 h-5"/></button>
+                        <button onClick={() => canvasRef.current?.redo()} disabled={!canvasState.canRedo} className="p-2 rounded-md hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed" aria-label="다시 실행"><RedoIcon className="w-5 h-5"/></button>
                         <button onClick={() => canvasRef.current?.clear()} className="p-2 rounded-md hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors" aria-label="캔버스 초기화"><ArrowPathIcon className="w-5 h-5"/></button>
                     </div>
                     <div className="h-64 w-full rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700">
-                        <Canvas ref={canvasRef} onDrawingChange={setIsCanvasEmpty} theme={theme} mode={canvasMode} />
+                        <Canvas ref={canvasRef} onStateChange={setCanvasState} theme={theme} mode={canvasMode} />
                     </div>
-                    <button onClick={handleConvertToText} disabled={isCanvasEmpty || status === 'RECOGNIZING'} className="mt-3 w-full bg-gray-200 text-gray-800 font-semibold py-2 px-4 rounded-lg hover:bg-gray-300 dark:bg-gray-600 dark:text-gray-200 dark:hover:bg-gray-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                    <button onClick={handleConvertToText} disabled={canvasState.isEmpty || status === 'RECOGNIZING' || !!userSolutionLatex} className="mt-3 w-full bg-gray-200 text-gray-800 font-semibold py-2 px-4 rounded-lg hover:bg-gray-300 dark:bg-gray-600 dark:text-gray-200 dark:hover:bg-gray-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
                         {status === 'RECOGNIZING' ? '변환 중...' : '텍스트로 변환하기'}
                     </button>
                     {userSolutionLatex && (
@@ -191,20 +204,24 @@ const MainPanel: React.FC<MainPanelProps> = ({ addHistoryEntry, theme }) => {
         </div>
 
         {/* Action Button */}
-        <div className="flex flex-col justify-center items-center gap-4">
-          <button onClick={handleGetFeedback} disabled={!userSolutionLatex || status === 'LOADING'} className="w-full max-w-sm bg-indigo-600 text-white font-semibold py-3 px-8 rounded-lg shadow-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-all duration-200 disabled:bg-indigo-400 disabled:cursor-not-allowed flex items-center justify-center text-lg">
-             {status === 'LOADING' ? (
-                <>
-                  <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin mr-3"></div>
-                  분석 중...
-                </>
-             ) : (
-                <>
-                  <SparklesIcon className="w-6 h-6 mr-2" />
-                  AI 피드백 받기
-                </>
-             )}
-          </button>
+        <div className="flex flex-col justify-center items-center gap-4 min-h-[80px]">
+            <button 
+                onClick={handleGetFeedback} 
+                disabled={status === 'LOADING' || !userSolutionLatex} 
+                className="w-full max-w-sm bg-indigo-600 text-white font-semibold py-3 px-8 rounded-lg shadow-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-all duration-200 disabled:bg-indigo-400 disabled:cursor-not-allowed flex items-center justify-center text-lg"
+            >
+               {status === 'LOADING' ? (
+                  <>
+                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin mr-3"></div>
+                    분석 중...
+                  </>
+               ) : (
+                  <>
+                    <SparklesIcon className="w-6 h-6 mr-2" />
+                    AI 피드백 받기
+                  </>
+               )}
+            </button>
            <button onClick={handleClearAll} className="text-sm text-gray-500 dark:text-gray-400 hover:underline">
             전체 초기화
           </button>
