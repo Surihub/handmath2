@@ -1,0 +1,5 @@
+{
+  "name": "Math AI Tutor",
+  "description": "An interactive math learning application for middle and high school students. Users can write math problems by hand, get them recognized, provide a solution, and receive instant AI-powered feedback and guidance.",
+  "requestFramePermissions": []
+}
